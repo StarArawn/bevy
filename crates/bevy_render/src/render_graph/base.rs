@@ -72,6 +72,7 @@ pub mod node {
     pub const MAIN_SAMPLED_COLOR_ATTACHMENT: &str = "main_pass_sampled_color_attachment";
     pub const MAIN_PASS: &str = "main_pass";
     pub const SHARED_BUFFERS: &str = "shared_buffers";
+    pub const COMPUTE_PASS: &str = "compute_pass";
 }
 
 pub mod camera {

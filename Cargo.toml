@@ -375,6 +375,11 @@ path = "examples/reflection/trait_reflection.rs"
 name = "scene"
 path = "examples/scene/scene.rs"
 
+# Compute Shaders
+[[example]]
+name = "raytrace"
+path = "examples/compute_shader/raytrace.rs"
+
 # Shaders
 [[example]]
 name = "animate_shader"
