@@ -1,12 +1,7 @@
 use bevy_asset::{Assets, Handle};
-use bevy_ecs::{prelude::{Mut, World}, world::WorldCell};
+use bevy_ecs::{prelude::{Mut, World}, world::{WorldBorrowMut, WorldCell}};
 use bevy_math::UVec3;
-
-use crate::{camera::ActiveCameras, pipeline::{
-        BindGroupDescriptorId, PipelineCompiler, ComputePipelineDescriptor, ComputePipelineSpecialization,
-    }, render_graph::Node, renderer::{
-        BindGroupId, RenderResourceBindings, RenderResourceContext,
-    }, shader::Shader};
+use crate::{camera::ActiveCameras, draw::DrawError, pipeline::{BindGroupDescriptorId, ComputePipelineDescriptor, ComputePipelineSpecialization, PipelineCompiler}, render_graph::Node, renderer::{AssetRenderResourceBindings, BindGroupId, RenderResourceBindings, RenderResourceContext}, shader::Shader};
 
 #[derive(Debug)]
 struct SetBindGroupCommand {
@@ -98,31 +93,63 @@ impl ComputePassNode {
         self.specialized_pipeline_handle
             .replace(specialized_pipeline_handle);
     }
-}
 
-// Update bind groups and collect SetBindGroupCommands in Vec
-fn update_bind_groups(
-    render_resource_bindings: &mut RenderResourceBindings,
-    pipeline_descriptor: &ComputePipelineDescriptor,
-    render_resource_context: &dyn RenderResourceContext,
-    set_bind_group_commands: &mut Vec<SetBindGroupCommand>,
-) {
-    // Try to set up the bind group for each descriptor in the pipeline layout
-    // Some will be set up later, during update
-    for bind_group_descriptor in &pipeline_descriptor.layout.as_ref().unwrap().bind_groups {
-        if let Some(bind_group) = render_resource_bindings
-            .update_bind_group(bind_group_descriptor, render_resource_context)
-        {
-            set_bind_group_commands.push(SetBindGroupCommand {
-                index: bind_group_descriptor.index,
-                descriptor_id: bind_group_descriptor.id,
-                bind_group: bind_group.id,
-            })
+    fn set_asset_bind_groups(
+        render_resource_context: &dyn RenderResourceContext,
+        asset_render_resource_bindings: &mut WorldBorrowMut<AssetRenderResourceBindings>,
+        compute_pipelines_descriptor: &ComputePipelineDescriptor,
+        render_resource_bindings: &mut [&mut RenderResourceBindings],
+    ) -> Vec<SetBindGroupCommand> {
+        let mut bind_groups = Vec::new();
+
+        let layout = compute_pipelines_descriptor
+            .get_layout()
+            .ok_or(DrawError::PipelineHasNoLayout).unwrap();
+        
+        'bind_group_descriptors: for bind_group_descriptor in layout.bind_groups.iter() {
+            for bindings in render_resource_bindings.iter_mut() {
+                if let Some(bind_group) =
+                    bindings.update_bind_group(bind_group_descriptor, render_resource_context)
+                {
+                    dbg!(&bind_group_descriptor);
+                    bind_groups.push(SetBindGroupCommand {
+                        index: bind_group_descriptor.index,
+                        descriptor_id: bind_group_descriptor.id,
+                        bind_group: bind_group.id,
+                    });
+                    continue 'bind_group_descriptors;
+                }
+            }
+
+            for bindings in render_resource_bindings.iter_mut() {
+                for (asset_handle, _) in bindings.iter_assets() {
+                    let asset_bindings = if let Some(asset_bindings) =
+                        asset_render_resource_bindings.get_mut_untyped(asset_handle)
+                    {
+                        asset_bindings
+                    } else {
+                        continue;
+                    };
+
+                    if let Some(bind_group) = asset_bindings
+                        .update_bind_group(bind_group_descriptor, render_resource_context)
+                    {
+                        dbg!(&bind_group_descriptor);
+                        bind_groups.push(SetBindGroupCommand {
+                            index: bind_group_descriptor.index,
+                            descriptor_id: bind_group_descriptor.id,
+                            bind_group: bind_group.id,
+                        });
+                        continue 'bind_group_descriptors;
+                    }
+                }
+            }
         }
+        bind_groups
     }
 }
 
-impl  Node for ComputePassNode {
+impl Node for ComputePassNode {
     fn prepare(&mut self, world: &mut World) {
         // Clear previous frame's bind groups
         self.bind_groups.clear();
@@ -151,14 +178,23 @@ impl  Node for ComputePassNode {
                     .get(self.specialized_pipeline_handle.as_ref().unwrap())
                     .unwrap();
 
-                // Do the update
-                update_bind_groups(
+                let mut asset_render_resource_bindings = world_cell.get_resource_mut::<AssetRenderResourceBindings>().unwrap();
+
+                let render_resource_bindings = &mut [
                     &mut render_resource_bindings,
-                    pipeline_descriptor,
+                    &mut self.render_resource_bindings,
+                ];
+
+                // Update bind groups for render resource assets
+                let bind_groups = Self::set_asset_bind_groups(
                     &**render_resource_context,
-                    &mut self.bind_groups,
+                    &mut asset_render_resource_bindings,
+                    pipeline_descriptor, 
+                    render_resource_bindings
                 );
 
+                self.bind_groups.extend(bind_groups);
+                
                 pipeline_descriptor.clone()
             };
 
@@ -174,7 +210,7 @@ impl  Node for ComputePassNode {
                     continue;
                 }; 
 
-                 let layout = pipeline_descriptor.get_layout().unwrap();
+                let layout = pipeline_descriptor.get_layout().unwrap();
                 for bind_group_descriptor in layout.bind_groups.iter() {
                     if let Some(bind_group) =
                         active_camera.bindings.update_bind_group(
@@ -196,39 +232,11 @@ impl  Node for ComputePassNode {
 
     fn update(
         &mut self,
-        world: &bevy_ecs::prelude::World,
+        _world: &bevy_ecs::prelude::World,
         render_context: &mut dyn crate::renderer::RenderContext,
         _input: &crate::render_graph::ResourceSlots,
         _output: &mut crate::render_graph::ResourceSlots,
     ) {
-        // Prepare bind groups
-        // Get the necessary resources
-        let pipeline_descriptors = world.get_resource::<Assets<ComputePipelineDescriptor>>().unwrap();
-        let pipeline_descriptor = pipeline_descriptors
-            .get(self.specialized_pipeline_handle.as_ref().unwrap())
-            .unwrap();
-        let render_resource_context = render_context.resources_mut();
-
-        // Do the update
-        update_bind_groups(
-            &mut self.render_resource_bindings,
-            pipeline_descriptor,
-            render_resource_context,
-            &mut self.bind_groups,
-        );
-
-        // Check if all bindings are set, will get WGPU error otherwise
-        if self.bind_groups.len()
-            != pipeline_descriptor
-                .layout
-                .as_ref()
-                .unwrap()
-                .bind_groups
-                .len()
-        {
-            panic!("Failed to set all bind groups");
-        }
-
         // Begin actual render pass
         render_context.begin_compute_pass(
             &mut |compute_pass| {
@@ -246,8 +254,7 @@ impl  Node for ComputePassNode {
                     );
                 });
 
-                // Draw a single triangle without the need for buffers
-                // see fullscreen.vert
+                // Dispatch compute shader.
                 compute_pass.dispatch(self.work_groups.x, self.work_groups.y, self.work_groups.z);
             },
         );
