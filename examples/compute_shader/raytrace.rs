@@ -11,6 +11,10 @@ layout(set = 0, binding = 0) uniform CameraViewProj {
     mat4 ViewProj;
 };
 
+layout(set = 1, binding = 1) uniform ComputeResource_color {
+    vec4 color;
+};
+
 void main() {
     mat4 my_mat = ViewProj;
 }

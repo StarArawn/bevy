@@ -105,13 +105,14 @@ impl ComputePassNode {
         let layout = compute_pipelines_descriptor
             .get_layout()
             .ok_or(DrawError::PipelineHasNoLayout).unwrap();
+        dbg!(&layout.bind_groups);
         
         'bind_group_descriptors: for bind_group_descriptor in layout.bind_groups.iter() {
+            dbg!(&bind_group_descriptor);
             for bindings in render_resource_bindings.iter_mut() {
                 if let Some(bind_group) =
                     bindings.update_bind_group(bind_group_descriptor, render_resource_context)
                 {
-                    dbg!(&bind_group_descriptor);
                     bind_groups.push(SetBindGroupCommand {
                         index: bind_group_descriptor.index,
                         descriptor_id: bind_group_descriptor.id,
